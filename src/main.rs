@@ -8,12 +8,14 @@ use std::collections::HashMap;
 use nix::unistd::execv;
 use std::ffi::CString;
 
+//stores debugger state and target process information
 struct Debugger{
     pid: Pid,
     program_name: String,
 }
 
 impl Debugger {
+    //creates a new debugger instance for the target process
     fn new(program_name: String, pid: Pid) -> Self {
         Self {
             pid,
@@ -21,7 +23,9 @@ impl Debugger {
         }
     }
 
+    //Run the debugger
     fn run(&self) {
+        //Waits until child process (debugee) stops
         match waitpid(self.pid, None){
             Ok(status) => {
                 println!("");
@@ -32,6 +36,7 @@ impl Debugger {
             }
         }
 
+        //main debugger command loop 
         loop{
             let mut command = String::new();
 
@@ -48,8 +53,11 @@ impl Debugger {
     }    
 
     fn handle_command(&self, command: &str) -> bool{
+        //execution of debugger commands
         match command.trim(){
+            //Quits the debugger
             "quit" => false,
+            //Continues the execution of the debugee
             "continue" => {
                 ptrace::cont(self.pid, None).expect("Continue failed");
                 waitpid(self.pid, None).expect("waitpid failed");
@@ -64,16 +72,21 @@ impl Debugger {
 }
 
 fn main() {
+    //The variable args saves the command line inputs
     let args:Vec<String> = env::args().collect();
 
+    //Error message in case there's no minimum arguments
     if args.len() < 2{
         println!("Program name not specified");
         return;
     }
 
+    //Stores program name
     let prog = &args[1];
 
+    //Rust needs unsafe because of the fork, which is unsafe because only one thread is duplicated
     unsafe{
+        //This parts of the code creates the core of the project, calling parent (debugger) and child (Program that will be debbuged)
         match fork() {
             Ok(ForkResult::Parent {child, ..}) => {
                 //Parent process
