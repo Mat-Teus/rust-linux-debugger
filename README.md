@@ -23,10 +23,10 @@ Current features:
 - Interactive debugger prompt
 - Continue execution command
 - Process synchronization using `waitpid`
+- Software Breakpoints with INT3
 
 Planned features:
 
-- Software breakpoints (`INT3`)
 - Register inspection
 - Memory reading/writing
 - ELF parsing
