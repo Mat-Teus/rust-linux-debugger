@@ -1,4 +1,4 @@
-use std::{env, io, string};
+use std::{env, io};
 use std::io::Write;
 use nix::unistd::{fork, ForkResult, Pid};
 use nix::sys::ptrace;
@@ -9,6 +9,8 @@ use std::ffi::CString;
 use nix::sys::personality::{set,Persona,};
 
 const N_REGISTERS:usize = 27;
+
+//Register description is a array of register with the information of all the 27 registers that can be used during the debug
 const REGISTER_DESCRIPTION:[Register_Description; N_REGISTERS] = [
     Register_Description{
         r: Register::R15,
@@ -175,7 +177,7 @@ const REGISTER_DESCRIPTION:[Register_Description; N_REGISTERS] = [
 ];
 
 #[derive(Clone,Copy, PartialEq)]
-enum Register{
+enum Register{//enum with name of the 27 registers that will be used
     Rax, Rbx, Rcx, Rdx,
     Rdi, Rsi, Rbp, Rsp,
     R8,  R9,  R10, R11,
@@ -276,11 +278,50 @@ impl Debugger {
         }
     }    
 
+    fn read_memory(&self,address:usize) -> i64{
+        return ptrace::read(self.pid, address as ptrace::AddressType).expect("memory read failed");
+    }
+
+    fn write_memory(&self,address:usize,value:i64){
+        ptrace::write(self.pid, address as ptrace::AddressType, value ).expect("memory write failed");
+    }
+
     fn set_a_breakpoint_at_a_address (&mut self, addr: usize){
         println!("Set breakpoint at 0x{:x}", addr);
         let mut bp = Breakpoint::new(self.pid, addr);//creates breakpoint using the address and the pid of the debugee process
         bp.enable();
         self.breakpoints.insert(addr, bp);//inserts breakpoint on the hashmap
+    }
+
+    fn get_pc(&self) -> u64{
+        return self.get_register_value(Register::Rip);
+    }
+
+    fn set_pc(&self, pc:u64){
+        self.set_register_value(Register::Rip, pc);
+    }
+
+    fn step_over_breakpoint(&mut self){
+        let possible_breakpoint_position = (self.get_pc() - 1) as usize;
+
+        if self.breakpoints.contains_key(&possible_breakpoint_position){
+            if self.breakpoints.get(&possible_breakpoint_position).unwrap().is_enabled(){
+                let previous_instruction_address = possible_breakpoint_position;
+                self.set_pc(previous_instruction_address as u64);
+
+                self.breakpoints.get_mut(&possible_breakpoint_position).unwrap().disable();
+
+                ptrace::step(self.pid, None);
+                waitpid(self.pid, None);
+
+                self.breakpoints.get_mut(&possible_breakpoint_position).unwrap().enable();
+            }
+        }
+    }
+
+    fn wait_for_signal(&self){
+        let status = waitpid(self.pid, None).expect("error");
+        println!("{:?}", status);
     }
 
     fn handle_command(&mut self, command: &str) -> bool{
@@ -294,18 +335,75 @@ impl Debugger {
         match args[0]{
             //Quits the debugger
             "quit" => false,
+
             //Continues the execution of the debugee
             "continue" => {
+                self.step_over_breakpoint();
                 ptrace::cont(self.pid, None).expect("Continue failed");
-                waitpid(self.pid, None).expect("waitpid failed");
+                self.wait_for_signal();
                 true
             }
+
             "breakpoint" => {
                 //breakpoint at given memory address
                 let addr = usize::from_str_radix(&args[1][2..], 16).expect("invalid address");//handles the first two chars
                 self.set_a_breakpoint_at_a_address(addr); //sets a breakpoint at an address
                 true
             }
+            "register" => {match args[1]{
+                    "dump" => {
+                        self.dump_registers();
+                        true
+                    }
+
+                    "read" => {
+                        let reg = self.get_register_from_name(args[2]); 
+                        let value = self.get_register_value(reg);
+
+                        println!("{} = 0x{:016x}", args[2], value); //print value of the desired register
+                        true
+                    }
+
+                    "write" => {
+                        let reg = self.get_register_from_name(args[2]);
+                        let value = u64::from_str_radix(&args[3][2..], 16).expect("Error");
+
+                        self.set_register_value(reg, value); //changes register values according to what the user typed on the CLI
+                        true
+                    }
+
+                    _ => {
+                        println!("error");
+                        true
+                    }
+                }
+            }
+
+            "memory" =>{
+                match args[1]{
+
+                    "write" => {
+                        let address = usize::from_str_radix(&args[2][2..], 16).expect("error");
+                        let value = i64::from_str_radix(&args[3][2..], 16).expect("Error");
+                        self.write_memory(address, value);
+                        true
+                    }
+
+                    "read" => {
+                        let address = usize::from_str_radix(&args[2][2..], 16).expect("error");
+                        println!("0x{:016x}", self.read_memory(address));
+                        true
+                    }
+
+                    _ => {
+                        println!("error");
+                        true
+                    }
+
+                }
+            }
+            
+
             _ => {
                 println!("Unknown command");
                 true
@@ -314,8 +412,8 @@ impl Debugger {
     }
 
     fn get_register_value(&self, reg: Register) -> u64{
-        let regs = ptrace::getregs(self.pid).expect("Failed to get register");
-        match reg{
+        let regs = ptrace::getregs(self.pid).expect("Failed to get register"); //get register info
+        match reg{ //returns values of the designated register
             Register::R15 => regs.r15,
             Register::R14 => regs.r14,
             Register::R13 => regs.r13,
@@ -347,8 +445,8 @@ impl Debugger {
     }
 
     fn set_register_value(&self, reg: Register, value: u64){
-        let mut regs = ptrace::getregs(self.pid).expect("Failed to get register");
-        match reg{
+        let mut regs = ptrace::getregs(self.pid).expect("Failed to get register"); //get register that will be used by the process
+        match reg{ //this match sets the value in the variable regs
             Register::R15 => regs.r15 = value,
             Register::R14 => regs.r14 = value,
             Register::R13 => regs.r13 = value,
@@ -378,20 +476,26 @@ impl Debugger {
             Register::Gs => regs.gs = value,
     }
 
-        ptrace::setregs(self.pid, regs).expect("failed to set registers");
+        ptrace::setregs(self.pid, regs).expect("failed to set registers"); //sets the value on regs on the actual register
     }   
 
     fn get_register_value_from_dwarf_register(&self, regnum: i64) -> u64{
         let reg = REGISTER_DESCRIPTION.iter().find(|rd| rd.dwarf_r == regnum).expect("unknown dwarf register");
-        return self.get_register_value(reg.r);
+        return self.get_register_value(reg.r); //returns the value of dwarf register
     }
 
     fn get_register_name(&self, reg: Register) -> &'static str{
-        return REGISTER_DESCRIPTION.iter().find(|rd| rd.r == reg).expect("register unknown").name
+        return REGISTER_DESCRIPTION.iter().find(|rd| rd.r == reg).expect("register unknown").name //returns register name after knowing who it is
     }
 
     fn get_register_from_name(&self, name: &str) -> Register {
-        return REGISTER_DESCRIPTION.iter().find(|rd| rd.name == name).expect("register unknown").r
+        return REGISTER_DESCRIPTION.iter().find(|rd| rd.name == name).expect("register unknown").r //returns the register after knowing its name
+    }
+
+    fn dump_registers(&self){
+        for r in REGISTER_DESCRIPTION.iter(){
+            println!("{} 0x{:016x}", r.name, self.get_register_value(r.r)); //print all of the current registers values
+        }
     }
 }
 
