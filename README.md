@@ -17,18 +17,16 @@ Inspired by the "Writing a Linux Debugger" series.
 ## Features
 
 Current features:
-
 - Process tracing with `ptrace`
 - Fork/exec debugger architecture
 - Interactive debugger prompt
 - Continue execution command
 - Process synchronization using `waitpid`
 - Software Breakpoints with INT3
+- Register Inspection
+- Memory Reading Writing 
 
 Planned features:
-
-- Register inspection
-- Memory reading/writing
 - ELF parsing
 - DWARF debug symbols
 - Single stepping
