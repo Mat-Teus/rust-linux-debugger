@@ -1,29 +1,38 @@
-use std::{io};
+use std::{fs, io};
 use std::io::Write;
-use nix::unistd::{ForkResult, Pid};
+use nix::unistd::{Pid};
 use nix::sys::ptrace;
 use nix::sys::wait::waitpid;
 use std::collections::HashMap;
-use nix::unistd::execv;
-use std::ffi::CString;
-use nix::sys::personality::{Persona,};
-use crate::registers::*;
+use gimli::{Dwarf, EndianSlice, LittleEndian, SectionId};
+use object::{File, Object, ObjectSection, ObjectSymbol};
+use crate::registers::{self, *};
 use crate::breakpoint::*;
 
 //stores debugger state and target process information
 pub struct Debugger{
     pid: Pid,
     program_name: String,
-    breakpoints: HashMap<usize, Breakpoint>
+    breakpoints: HashMap<usize, Breakpoint>,
+    file: Vec<u8>,
+}
+
+pub struct function_info{
+    pub name: String,
+    pub low_pc: u64,
+    pub high_pc: u64
 }
 
 impl Debugger {
     //creates a new debugger instance for the target process
     pub fn new(program_name: String, pid: Pid) -> Self {
+        let file_data = fs::read(&program_name).expect("Failed to read");
+
         Self {
             pid,
             program_name,
-            breakpoints: HashMap::new()
+            breakpoints: HashMap::new(),
+            file: file_data,
         }
     }
 
@@ -35,7 +44,7 @@ impl Debugger {
                 println!("{:?}", status);
             }
 
-            Err(err) => {
+            Err(_err) => {
                 println!("Error");
             }
         }
@@ -180,6 +189,11 @@ impl Debugger {
 
                 }
             }
+
+            "elf" => {
+                self.dump_elf(); //display all elf info about the debugee
+                true
+            }
             
 
             _ => {
@@ -273,6 +287,19 @@ impl Debugger {
     pub fn dump_registers(&self){
         for r in REGISTER_DESCRIPTION.iter(){
             println!("{} 0x{:016x}", r.name, self.get_register_value(r.r)); //print all of the current registers values
+        }
+    }
+
+    pub fn get_elf(&self) -> object::File<'_>{ //get the elf value of the debugee program
+        return File::parse(&*self.file).expect("Failed to parse elf");
+    }
+
+
+    pub fn dump_elf(&self){ //test function to see the informations of the ELF file
+        let elf = self.get_elf();
+
+        for section in elf.sections(){
+            println!("{}", section.name().unwrap());
         }
     }
 }

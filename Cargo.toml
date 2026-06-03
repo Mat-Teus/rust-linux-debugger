@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 nix = {version = "0.31.3", features = ["process", "ptrace", "personality"]}
+object = "0.39.1"
+gimli = "0.33.0"
